@@ -54,8 +54,7 @@ class fpdb_db:
                          , {'tab':'Tourneys', 'col':'siteTourneyNo', 'drop':0}
                          ]
                        , [ # indexes for postgres (list index 3)
-                           {'tab':'Boardcards',      'col':'handId',            'drop':0}
-                         , {'tab':'Gametypes',       'col':'siteId',            'drop':0}
+                           {'tab':'Gametypes',       'col':'siteId',            'drop':0}
                          , {'tab':'Hands',           'col':'gametypeId',        'drop':0} # mct 22/3/09
                          , {'tab':'Hands',           'col':'siteHandNo',        'drop':0}
                          , {'tab':'HandsActions',    'col':'handsPlayerId',     'drop':0}
@@ -260,7 +259,7 @@ class fpdb_db:
             self.cursor.execute(self.sql.query['createTourneysTable'])
             self.cursor.execute(self.sql.query['createTourneysPlayersTable'])
             self.cursor.execute(self.sql.query['createHandsPlayersTable'])
-            #self.cursor.execute(self.sql.query['createHandsActionsTable'])
+            self.cursor.execute(self.sql.query['createHandsActionsTable'])
             self.cursor.execute(self.sql.query['createHudCacheTable'])
             #self.cursor.execute(self.sql.query['addTourneyIndex'])
             #self.cursor.execute(self.sql.query['addHandsIndex'])

@@ -15,7 +15,6 @@
 #In the "official" distribution you can find the license in
 #agpl-3.0.txt in the docs folder of the package.
 
-import Hand
 import re
 import sys
 import traceback
@@ -34,16 +33,27 @@ import datetime
 import gettext
 gettext.install('fpdb')
 
+import Hand
+import Database
+
+
 class HandHistoryConverter():
 
     READ_CHUNK_SIZE = 10000 # bytes to read at a time from file (in tail mode)
-    def __init__(self, in_path = '-', out_path = '-', sitename = None, follow=False, index=0):
+    def __init__(self, in_path = '-', out_path = '-', sitename = None, follow=False, index=0, imp=None):
+        # If imp and sitename are provided imp.import_lines() can be called (in fpdb_import.py)
         logging.info("HandHistory init")
+        self.starttime = time.time()
         
         # default filetype and codepage. Subclasses should set these properly.
         self.filetype  = "text"
         self.codepage  = "utf8"
         self.index     = 0
+        # clear self.imp unless sitename is given as well
+        if sitename == None:
+            self.imp  = None
+        else:
+            self.imp  = imp
 
         self.in_path = in_path
         self.out_path = out_path
@@ -53,7 +63,9 @@ class HandHistoryConverter():
         if in_path == '-':
             self.in_fh = sys.stdin
 
-        if out_path == '-':
+        if self.imp != None:
+            self.out_fh = None
+        elif out_path == '-':
             self.out_fh = sys.stdout
         else:
             # TODO: out_path should be sanity checked.
@@ -63,6 +75,11 @@ class HandHistoryConverter():
         self.follow = follow
         self.compiledPlayers   = set()
         self.maxseats  = 10
+        self.totstored = 0
+        self.totdups = 0
+        self.totpartial = 0
+        self.toterrors = 0
+        self.tottime = 0
 
     def __str__(self):
         return """
@@ -78,26 +95,57 @@ If in follow mode, wait for more data to turn up.
 Otherwise, finish at eof.
 
 """
-        starttime = time.time()
-        if not self.sanityCheck():
-            print "Cowardly refusing to continue after failed sanity check"
-            return
+        try:
+            starttime = time.time()
+            if not self.sanityCheck():
+                print "Cowardly refusing to continue after failed sanity check"
+                return
 
-        if self.follow:
-            numHands = 0
-            for handText in self.tailHands():
-                numHands+=1
-                self.processHand(handText)
-        else:
-            handsList = self.allHandsAsList()
-            logging.info("Parsing %d hands" % len(handsList))
-            for handText in handsList:
-                self.processedHands.append(self.processHand(handText))
-            numHands=  len(handsList)
-        endtime = time.time()
-        print "read %d hands in %.3f seconds" % (numHands, endtime - starttime)
-        if self.out_fh != sys.stdout:
-            self.out_fh.close()
+            if self.follow:
+                numHands = 0
+                for handText in self.tailHands():
+                    numHands+=1
+                    self.processHand(handText)
+            else:
+                handsList = self.allHandsAsList()
+                logging.info("Parsing %d hands" % len(handsList))
+                self.totstored = 0
+                self.totdups = 0
+                self.totpartial = 0
+                self.toterrors = 0
+                if handsList == None: # prevent "not iterable" error message coming out
+                    print "*** NO HANDS FOUND IN FILE!"
+                else:
+                    for handText in handsList:
+                        (hand, stored, duplicates, partial, errors, ttime) = self.processHand(handText)
+                        self.processedHands.append(hand)
+                        self.totstored += stored
+                        self.totdups += duplicates
+                        self.totpartial += partial
+                        self.toterrors += errors
+
+                    if self.imp != None and self.imp.writeq != None:
+                        # if imp & imp.writeq is set, need to send finish msg and then wait for writeq to be processed
+                        self.imp.writeq.put( Database.HandToWrite(True) )
+                        if self.imp.settings['useMemoryParse']:
+                            #print "HHC: waiting for processing to finish"
+                            self.imp.writeq.join()
+                numHands = len(handsList)
+            endtime = time.time()
+            self.tottime = endtime - starttime
+            if self.imp != None and self.imp.writeq == None:
+                # processHand() is saving each hand to the database via import_lines() so output the total stored:
+                print "Total stored:", self.totstored, "duplicates:", self.totdups, "errors:", self.toterrors, " time:", self.tottime
+            else:
+                print "read %d hands in %.3f seconds" % (numHands, endtime - starttime)
+            #if self.imp != None:
+                # temp until values passed back to GuiBulkImport:
+                #print "\nHandHistory import done: Total stored:", self.totstored, "duplicates:", \
+                #      self.totdups, "errors:", self.toterrors, " time:", self.tottime
+            if self.imp == None and self.out_fh != sys.stdout:
+                self.out_fh.close()
+        except:
+            print "*** hhc.start error:", str(sys.exc_value)
 
 
     def tailHands(self):
@@ -201,8 +249,12 @@ which it expects to find at self.re_TailSplitHands -- see for e.g. Everleaf.py.
 
         if hand:
 #            print hand
-            hand.writeHand(self.out_fh)
-            return hand
+            hh = hand.writeHand(self.out_fh, self.imp, self.sitename)
+            (stored, duplicates, partial, errors, ttime) = (0, 0, 0, 0, 0)
+            if self.imp != None:
+                (stored, duplicates, partial, errors, ttime) = self.imp.import_lines(hh
+                                    , self.starttime, self.in_path, self.sitename, q = self.imp.writeq)
+            return (hand, stored, duplicates, partial, errors, ttime)
         else:
             logging.info("Unsupported game type: %s" % gametype)
             # TODO: pity we don't know the HID at this stage. Log the entire hand?
@@ -382,3 +434,6 @@ or None if we fail to get the info """
 
     def getLastCharacterRead(self):
         return self.index
+
+    def getStats(self):
+        return( (self.totstored, self.totdups, self.totpartial, self.toterrors, self.tottime) )

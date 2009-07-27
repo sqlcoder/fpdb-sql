@@ -27,6 +27,8 @@ import traceback
 import math
 import datetime
 import re
+import threading
+import Queue
 
 #    fpdb/FreePokerTools modules
 
@@ -62,6 +64,8 @@ class Importer:
         self.database   = None       # database will be the main db interface eventually
         self.fdb        = None       # fdb may disappear or just hold the simple db connection
         self.cursor     = None
+        self.parseq     = None
+        self.writeq     = None
         self.filelist   = {}
         self.dirlist    = {}
         self.siteIds    = {}
@@ -77,8 +81,19 @@ class Importer:
         
         self.settings.setdefault("minPrint", 30)
         self.settings.setdefault("handCount", 0)
+        # Following 3 settings aim to speed imports up, best options are first
+        self.settings.setdefault("useWriteQueue", False)   # set to True for faster bulk imports - nice :-)
+        self.settings.setdefault("useMemoryParse", False)  # set to True for faster bulk imports, not a
+                                                           # great speed help, just avoidea temp files on disk
+        self.settings.setdefault("commitEveryHand", True)  # set to False for faster bulk imports (but 
+                                                           # it doesn't help - may do if locking changed)
+
+        self.settings.setdefault("writeqBlockTime", 10)   # db write queue gives up after waiting this
+                                                          # long (seconds) - hopefully avoids hangs
+                                                          # if (when!) cockups happen
         
         self.database = Database.Database(self.config)  # includes .connection and .sql variables
+        self.dbWriteQ = Database.Database(self.config)  # db connection used by write queue
         self.fdb = fpdb_db.fpdb_db()   # sets self.fdb.db self.fdb.cursor and self.fdb.sql
         self.fdb.do_connect(self.config)
         self.fdb.db.rollback()         # make sure all locks are released
@@ -190,6 +205,7 @@ class Importer:
 #        if threads <= 1: do this bit
         for file in self.filelist:
             (stored, duplicates, partial, errors, ttime) = self.import_file_dict(file, self.filelist[file][0], self.filelist[file][1])
+            #print "after import_file_dict, stored =", stored
             totstored += stored
             totdups += duplicates
             totpartial += partial
@@ -323,30 +339,45 @@ class Importer:
 
         filter_name = filter.replace("ToFpdb", "")
 
-#  Example code for using threads & queues:  (maybe for obj and import_fpdb_file??)
-#def worker():
-#    while True:
-#        item = q.get()
-#        do_work(item)
-#        q.task_done()
-#
-#q = Queue()
-#for i in range(num_worker_threads):
-#     t = Thread(target=worker)
-#     t.setDaemon(True)
-#     t.start()
-#
-#for item in source():
-#    q.put(item)
-#
-#q.join()       # block until all tasks are done
+        # 3 stages here:
+        # call obj (one of the PokerStarsToFpdb type converters)
+        # call import_fpdb_file which calls fpdb_parse_logic.mainParser() to parse the file
+        # call (e.g.) Database.ring_holdem_omaha() to write the parsed hand to the db
+        
+        try:
+            mod = __import__(filter)
+            obj = getattr(mod, filter_name, None)
+        except:
+            print "error creating obj: " + str(sys.exc_value)
+            raise fpdb_simple.FpdbError("error creating obj: " + str(sys.exc_value))
 
-        mod = __import__(filter)
-        obj = getattr(mod, filter_name, None)
         if callable(obj):
-            conv = obj(in_path = file, out_path = out_path, index = 0) # Index into file 0 until changeover
-            if(conv.getStatus() and self.NEWIMPORT == False):
-                (stored, duplicates, partial, errors, ttime) = self.import_fpdb_file(out_path, site)
+            if not self.settings['useMemoryParse']:
+                conv = obj(in_path = file, out_path = out_path, index = 0, imp = None) # Index into file 0 until changeover
+            if(self.NEWIMPORT == False and (self.settings['useMemoryParse'] or conv.getStatus()) ):
+                try:
+                    if self.settings['useWriteQueue']:
+                        # create queue
+                        self.writeq = Queue.Queue(50)
+                        # start worker thread:
+                        t = threading.Thread(target = self.get_ring_holdem_omaha)
+                        t.setDaemon(True)
+                        t.start()
+                    else:
+                        self.writeq = None
+                    #print "start parsing ..."
+                    if self.settings['useMemoryParse']:
+                        #print "calling obj ... imp="+str(self)
+                        # obj will call import_lines() directly for each hand
+                        (stored, duplicates, partial, errors, ttime) = (0, 0, 0, 0, 0)
+                        conv = obj(in_path = file, out_path = out_path, index = 0, imp = self) # Index into file 0 until changeover
+                        (stored, duplicates, partial, errors, ttime) = conv.getStats()
+                    else:
+                        #print "call import_fpdb_file ..."
+                        (stored, duplicates, partial, errors, ttime) = self.import_fpdb_file(out_path, site, self.writeq)
+                except:
+                    print "import_file_dict: error using q and t: " + str(sys.exc_value)
+                    raise fpdb_simple.FpdbError("import_file_dict: error using q and t: " + str(sys.exc_value))
             elif (conv.getStatus() and self.NEWIMPORT == True):
                 #This code doesn't do anything yet
                 handlist = hhc.getProcessedHands()
@@ -366,10 +397,29 @@ class Importer:
         #This will barf if conv.getStatus != True
         return (stored, duplicates, partial, errors, ttime)
 
+    def get_ring_holdem_omaha(self):
+        #print "get_ring_holdem_omaha: starting ..."
+        sendLastDone = False
+        try:
+            while True:
+                #print "get_ring_holdem_omaha: waiting for a hand ..."
+                hand = self.writeq.get(True, self.settings['writeqBlockTime'])  # waits for at most 10 seconds before giving up
+                if hand.get_finished():
+                    sendLastDone = True
+                    break  # skip task_done() call in loop and save it until after commit
+                hand.send_ring_holdem_omaha(self.dbWriteQ)
+                #print "get_ring_holdem_omaha: hand %s saved to db" % (hand.get_siteHandNo(),)
+                self.writeq.task_done()
+        except:
+            print "get_ring_holdem_omaha error: " + str(sys.exc_value)
+            self.dbWriteQ.rollback()
+        self.dbWriteQ.commit()
+        print "db writer finished"
+        if sendLastDone:
+            self.writeq.task_done()
 
-    def import_fpdb_file(self, file, site):
+    def import_fpdb_file(self, file, site, q = None):
         starttime = time()
-        last_read_hand = 0
         loc = 0
         #print "file =", file
         if file == "stdin":
@@ -396,12 +446,21 @@ class Importer:
         self.lines = fpdb_simple.removeTrailingEOL(inputFile.readlines())
         self.pos_in_file[file] = inputFile.tell()
         inputFile.close()
+        return( self.import_lines(self.lines, starttime, file, site, q) )
+    # end def import_fpdb_file
 
-        try: # sometimes we seem to be getting an empty self.lines, in which case, we just want to return.
-            firstline = self.lines[0]
+    def import_lines(self, lines, starttime, file, site, q = None):
+        """This may be called to process a whole file (eg from import_fpdb_file() above) or just
+           to process a single hand ( ie. from HHC.processHand() ) according the the values of
+           self.settings['useMemoryParse'] and self.settings['useWriteQueue']
+           """
+           
+        
+        try: # sometimes we seem to be getting an empty lines, in which case, we just want to return.
+            firstline = lines[0]
         except:
             # just skip the debug message and return silently:
-            #print "DEBUG: import_fpdb_file: failed on self.lines[0]: '%s' '%s' '%s' '%s' " %( file, site, self.lines, loc)
+            #print "DEBUG: import_fpdb_file: failed on lines[0]: '%s' '%s' '%s' " %( file, site, lines)
             return (0,0,0,1,0)
 
         if firstline.find("Tournament Summary")!=-1:
@@ -418,10 +477,12 @@ class Importer:
         partial = 0 #counter
         errors = 0 #counter
 
-        for i in xrange (len(self.lines)):
-            if (len(self.lines[i])<2): #Wierd way to detect for '\r\n' or '\n'
+        #print "process "+str(len(lines))+" lines ..."
+        for i in xrange (len(lines)):
+            #print "b4 if < 2, len(lines[i])=<<"+str(len(lines[i]))+">>"
+            if (len(lines[i])<2): #Wierd way to detect for '\r\n' or '\n'
                 endpos=i
-                hand=self.lines[startpos:endpos]
+                hand=lines[startpos:endpos]
         
                 if (len(hand[0])<2):
                     hand=hand[1:]
@@ -440,11 +501,13 @@ class Importer:
                     try:
                         handsId = fpdb_parse_logic.mainParser( self.settings, self.fdb
                                                              , self.siteIds[site], category, hand
-                                                             , self.config, self.database )
-                        self.fdb.db.commit()
+                                                             , self.config, self.database, q )
+                        if self.settings['commitEveryHand']:
+                            #print "committing stored hand"
+                            self.fdb.db.commit()
 
                         stored += 1
-                        if self.callHud:
+                        if self.callHud and handsId >= 0:
                             #print "call to HUD here. handsId:",handsId
                             #pipe the Hands.id out to the HUD
                             print "sending hand to hud", handsId, "pipe =", self.caller.pipe_to_hud
@@ -461,7 +524,7 @@ class Importer:
                             raise
                         else:
                             self.fdb.db.rollback()
-                    except (fpdb_simple.FpdbError), fe:
+                    except:  # (fpdb_simple.FpdbError), fe:
                         errors += 1
                         self.printEmailErrorMessage(errors, file, hand)
                         self.fdb.db.rollback()
@@ -481,20 +544,30 @@ class Importer:
                                 print "Total stored:", stored, "duplicates:", duplicates, "errors:", errors, " time:", (time() - starttime)
                             sys.exit(0)
                 startpos = endpos
+
+        self.fdb.db.commit()
+        # wait until hands saved if write thread is running:
+        if not self.settings['useMemoryParse'] and q != None:
+            # send special hand to indicate finish (needs to be sent elsewhere if useMemoryParse is True):
+            q.put( Database.HandToWrite(finished=True) )
+            #print "waiting for processing to finish"
+            q.join()
+
         ttime = time() - starttime
-        print "\rTotal stored:", stored, "duplicates:", duplicates, "errors:", errors, " time:", ttime
-        
+        if not self.settings['useMemoryParse']:
+            print "Total stored:", stored, "duplicates:", duplicates, "errors:", errors, " time:", ttime
+
         if not stored:
             if duplicates:
-                for line_no in xrange(len(self.lines)):
-                    if self.lines[line_no].find("Game #")!=-1:
-                        final_game_line=self.lines[line_no]
+                for line_no in xrange(len(lines)):
+                    if lines[line_no].find("Game #")!=-1:
+                        final_game_line=lines[line_no]
                 handsId=fpdb_simple.parseSiteHandNo(final_game_line)
             else:
-                print "failed to read a single hand from file:", inputFile
+                print "fpdb_import: failed to read a single hand from file:", file
                 handsId=0
             #todo: this will cause return of an unstored hand number if the last hand was error
-        self.fdb.db.commit()
+        
         self.handsId=handsId
         return (stored, duplicates, partial, errors, ttime)
 

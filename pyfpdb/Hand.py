@@ -48,6 +48,8 @@ class Hand(object):
         self.gametype = gametype
         self.starttime = 0
         self.handText = handText
+        self.newTextList = []  # used to build up newText
+        self.newText = ""      # converted hand as a string
         self.handid = 0
         self.tablename = ""
         self.hero = ""
@@ -524,8 +526,23 @@ Map the tuple self.gametype onto the pokerstars string describing it
         return retstring
 
 
-    def writeHand(self, fh=sys.__stdout__):
-        print >>fh, "Override me"
+    def writeOrReturn(self, fh=sys.__stdout__, imp=None, sitename=None):
+        try:
+            if imp == None:
+                self.newText = "\n".join(self.newTextList+[""])  # need List+"" to add trailing NL
+                print >>fh, self.newText
+            else:
+                #q.put(self.newText)  no just call directly, q now called imp
+                return [s+"\n" for s in self.newTextList+["",""]]  # need +["",""] to add blank lines
+        except:
+            print "Hand.writeOrReturn error: imp=" + str(imp) + " " + str(sys.exc_value)
+            # do we want to raise errors in here or what?
+            # raise fpdb_simple.FpdbError( "Hand.writeOrReturn error: imp=" + str(imp) + " " + str(sys.exc_value) )
+
+# why are there 2 definitions of this?
+#    def writeHand(self, fh=sys.__stdout__, imp=None, sitename=None):
+#        print "Hand.writeHand"
+#        print >>fh, "Override me"
 
     def printHand(self):
         self.writeHand(sys.stdout)
@@ -587,11 +604,10 @@ Map the tuple self.gametype onto the pokerstars string describing it
             table_string = table_string + " Seat #%s is the button" % self.buttonpos
         return table_string
 
-
-    def writeHand(self, fh=sys.__stdout__):
+    def writeHand(self, fh=sys.__stdout__, imp=None, sitename=None):
         # PokerStars format.
-        print >>fh, self.writeGameLine() 
-        print >>fh, self.writeTableLine() 
+        self.newTextList.append( self.writeGameLine() )
+        self.newTextList.append( self.writeTableLine() )
 
 
 class HoldemOmahaHand(Hand):
@@ -745,55 +761,55 @@ class HoldemOmahaHand(Hand):
         return str(tidy.parseString(flat.flatten(s), **options))
 
         
-    def writeHand(self, fh=sys.__stdout__):
+    def writeHand(self, fh=sys.__stdout__, imp=None, sitename=None):
         # PokerStars format.
-        super(HoldemOmahaHand, self).writeHand(fh)
+        super(HoldemOmahaHand, self).writeHand(fh, imp, sitename)
 
         players_who_act_preflop = set(([x[0] for x in self.actions['PREFLOP']]+[x[0] for x in self.actions['BLINDSANTES']]))
         logging.debug(self.actions['PREFLOP'])
         for player in [x for x in self.players if x[1] in players_who_act_preflop]:
             #Only print stacks of players who do something preflop
-            print >>fh, ("Seat %s: %s ($%s in chips) " %(player[0], player[1], player[2]))
+            self.newTextList.append( ("Seat %s: %s ($%s in chips) " %(player[0], player[1], player[2])) )
 
         if self.actions['BLINDSANTES']:
             for act in self.actions['BLINDSANTES']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
         
-        print >>fh, ("*** HOLE CARDS ***")
+        self.newTextList.append( ("*** HOLE CARDS ***") )
         for player in self.dealt:
-            print >>fh, ("Dealt to %s [%s]" %(player, " ".join(self.holecards['PREFLOP'][player][1])))
+            self.newTextList.append( ("Dealt to %s [%s]" %(player, " ".join(self.holecards['PREFLOP'][player][1]))) )
         if self.hero == "":
             for player in self.shown.difference(self.dealt):
-                print >>fh, ("Dealt to %s [%s]" %(player, " ".join(self.holecards['PREFLOP'][player][1])))
+                self.newTextList.append( ("Dealt to %s [%s]" %(player, " ".join(self.holecards['PREFLOP'][player][1]))) )
 
         if self.actions['PREFLOP']:
             for act in self.actions['PREFLOP']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if self.board['FLOP']:
-            print >>fh, ("*** FLOP *** [%s]" %( " ".join(self.board['FLOP'])))
+            self.newTextList.append( ("*** FLOP *** [%s]" %( " ".join(self.board['FLOP']))) )
         if self.actions['FLOP']:
             for act in self.actions['FLOP']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if self.board['TURN']:
-            print >>fh, ("*** TURN *** [%s] [%s]" %( " ".join(self.board['FLOP']), " ".join(self.board['TURN'])))
+            self.newTextList.append( ("*** TURN *** [%s] [%s]" %( " ".join(self.board['FLOP']), " ".join(self.board['TURN']))) )
         if self.actions['TURN']:
             for act in self.actions['TURN']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if self.board['RIVER']:
-            print >>fh, ("*** RIVER *** [%s] [%s]" %(" ".join(self.board['FLOP']+self.board['TURN']), " ".join(self.board['RIVER']) ))
+            self.newTextList.append( ("*** RIVER *** [%s] [%s]" %(" ".join(self.board['FLOP']+self.board['TURN']), " ".join(self.board['RIVER']) )) )
         if self.actions['RIVER']:
             for act in self.actions['RIVER']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
 
         #Some sites don't have a showdown section so we have to figure out if there should be one
         # The logic for a showdown is: at the end of river action there are at least two players in the hand
         # we probably don't need a showdown section in pseudo stars format for our filtering purposes
         if self.shown:
-            print >>fh, ("*** SHOW DOWN ***")
+            self.newTextList.append( ("*** SHOW DOWN ***") )
             for name in self.shown:
                 # TODO: legacy importer can't handle only one holecard here, make sure there are 2 for holdem, 4 for omaha
                 # TOOD: If HoldHand subclass supports more than omahahi, omahahilo, holdem, add them here
@@ -803,7 +819,7 @@ class HoldemOmahaHand(Hand):
                 elif self.gametype['category'] in ('holdem'):
                     numOfHoleCardsNeeded = 2
                 if len(self.holecards['PREFLOP'][name]) == numOfHoleCardsNeeded:
-                    print >>fh, ("%s shows [%s] (a hand...)" % (name, " ".join(self.holecards['PREFLOP'][name][1])))
+                    self.newTextList.append( ("%s shows [%s] (a hand...)" % (name, " ".join(self.holecards['PREFLOP'][name][1]))) )
                 
         # Current PS format has the lines:
         # Uncalled bet ($111.25) returned to s0rrow
@@ -813,39 +829,40 @@ class HoldemOmahaHand(Hand):
         # Immediately before the summary.
         # The current importer uses those lines for importing winning rather than the summary
         for name in self.pot.returned:
-            print >>fh, ("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name))
+            self.newTextList.append( ("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name)) )
         for entry in self.collected:
-            print >>fh, ("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1]))
+            self.newTextList.append( ("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1])) )
 
-        print >>fh, ("*** SUMMARY ***")
-        print >>fh, "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake)
+        self.newTextList.append( ("*** SUMMARY ***") )
+        self.newTextList.append( "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake) )
 
         board = []
         for street in ["FLOP", "TURN", "RIVER"]:
             board += self.board[street]
         if board:   # sometimes hand ends preflop without a board
-            print >>fh, ("Board [%s]" % (" ".join(board)))
+            self.newTextList.append( ("Board [%s]" % (" ".join(board))) )
 
         for player in [x for x in self.players if x[1] in players_who_act_preflop]:
             seatnum = player[0]
             name = player[1]
             if name in self.collectees and name in self.shown:
-                print >>fh, ("Seat %d: %s showed [%s] and won (%s%s)" % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1]), self.sym, self.collectees[name]))
+                self.newTextList.append( ("Seat %d: %s showed [%s] and won (%s%s)" % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1]), self.sym, self.collectees[name])) )
             elif name in self.collectees:
-                print >>fh, ("Seat %d: %s collected (%s%s)" % (seatnum, name, self.sym, self.collectees[name]))
+                self.newTextList.append( ("Seat %d: %s collected (%s%s)" % (seatnum, name, self.sym, self.collectees[name])) )
             #~ elif name in self.shown:
-                #~ print >>fh, _("Seat %d: %s showed [%s]" % (seatnum, name, " ".join(self.holecards[name]['PREFLOP'])))
+                #~ self.newTextList.append( _("Seat %d: %s showed [%s]" % (seatnum, name, " ".join(self.holecards[name]['PREFLOP']))) )
             elif name in self.folded:
-                print >>fh, ("Seat %d: %s folded" % (seatnum, name))
+                self.newTextList.append( ("Seat %d: %s folded" % (seatnum, name)) )
             else:
                 if name in self.shown:
-                    print >>fh, ("Seat %d: %s showed [%s] and lost with..." % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1])))
+                    self.newTextList.append( ("Seat %d: %s showed [%s] and lost with..." % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1]))) )
                 elif name in self.mucked:
-                    print >>fh, ("Seat %d: %s mucked [%s] " % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1])))
+                    self.newTextList.append( ("Seat %d: %s mucked [%s] " % (seatnum, name, " ".join(self.holecards['PREFLOP'][name][1]))) )
                 else:
-                    print >>fh, ("Seat %d: %s mucked" % (seatnum, name))
+                    self.newTextList.append( ("Seat %d: %s mucked" % (seatnum, name)) )
 
-        print >>fh, "\n\n"
+        self.newTextList.append( "\n\n" )
+        return self.writeOrReturn(fh, imp, sitename)
         
 class DrawHand(Hand):
     def __init__(self, hhc, sitename, gametype, handText, builtFrom = "HHC"):
@@ -931,7 +948,7 @@ class DrawHand(Hand):
         self.actions[street].append(act)
 
 
-    def writeHand(self, fh=sys.__stdout__):
+    def writeHand(self, fh=sys.__stdout__, imp=None, sitename=None):
         # PokerStars format.
         super(DrawHand, self).writeHand(fh)
 
@@ -939,53 +956,53 @@ class DrawHand(Hand):
 
         for player in [x for x in self.players if x[1] in players_who_act_ondeal]:
             #Only print stacks of players who do something on deal
-            print >>fh, _("Seat %s: %s (%s%s in chips) " %(player[0], player[1], self.sym, player[2]))
+            self.newTextList.append( _("Seat %s: %s (%s%s in chips) " %(player[0], player[1], self.sym, player[2])) )
 
         if 'BLINDSANTES' in self.actions:
             for act in self.actions['BLINDSANTES']:
-                print >>fh, _("%s: %s %s %s%s" %(act[0], act[1], act[2], self.sym, act[3]))
+                self.newTextList.append( _("%s: %s %s %s%s" %(act[0], act[1], act[2], self.sym, act[3])) )
 
         if 'DEAL' in self.actions:
-            print >>fh, _("*** DEALING HANDS ***")
+            self.newTextList.append( _("*** DEALING HANDS ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_act_ondeal]:
                 if 'DEAL' in self.holecards[player]:
                     (nc,oc) = self.holecards[player]['DEAL']
-                    print >>fh, _("Dealt to %s: [%s]") % (player, " ".join(nc))
+                    self.newTextList.append( _("Dealt to %s: [%s]") % (player, " ".join(nc)) )
             for act in self.actions['DEAL']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if 'DRAWONE' in self.actions:
-            print >>fh, _("*** FIRST DRAW ***")
+            self.newTextList.append( _("*** FIRST DRAW ***") )
             for act in self.actions['DRAWONE']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
                 if act[0] == self.hero and act[1] == 'discards':
                     (nc,oc) = self.holecards['DRAWONE'][act[0]]
                     dc = self.discards['DRAWONE'][act[0]]
                     kc = oc - dc
-                    print >>fh, _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc)))
+                    self.newTextList.append( _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc))) )
 
         if 'DRAWTWO' in self.actions:
-            print >>fh, _("*** SECOND DRAW ***")
+            self.newTextList.append( _("*** SECOND DRAW ***") )
             for act in self.actions['DRAWTWO']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
                 if act[0] == self.hero and act[1] == 'discards':
                     (nc,oc) = self.holecards['DRAWTWO'][act[0]]
                     dc = self.discards['DRAWTWO'][act[0]]
                     kc = oc - dc
-                    print >>fh, _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc)))
+                    self.newTextList.append( _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc))) )
 
         if 'DRAWTHREE' in self.actions:
-            print >>fh, _("*** THIRD DRAW ***")
+            self.newTextList.append( _("*** THIRD DRAW ***") )
             for act in self.actions['DRAWTHREE']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
                 if act[0] == self.hero and act[1] == 'discards':
                     (nc,oc) = self.holecards['DRAWTHREE'][act[0]]
                     dc = self.discards['DRAWTHREE'][act[0]]
                     kc = oc - dc
-                    print >>fh, _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc)))
+                    self.newTextList.append( _("Dealt to %s [%s] [%s]" % (act[0], " ".join(kc), " ".join(nc))) )
 
         if 'SHOWDOWN' in self.actions:
-            print >>fh, _("*** SHOW DOWN ***")
+            self.newTextList.append( _("*** SHOW DOWN ***") )
             #TODO: Complete SHOWDOWN
 
         # Current PS format has the lines:
@@ -996,13 +1013,15 @@ class DrawHand(Hand):
         # Immediately before the summary.
         # The current importer uses those lines for importing winning rather than the summary
         for name in self.pot.returned:
-            print >>fh, _("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name))
+            self.newTextList.append( _("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name)) )
         for entry in self.collected:
-            print >>fh, _("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1]))
+            self.newTextList.append( _("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1])) )
 
-        print >>fh, _("*** SUMMARY ***")
-        print >>fh, "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake)
-        print >>fh, "\n\n"
+        self.newTextList.append( _("*** SUMMARY ***") )
+        self.newTextList.append( "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake) )
+        self.newTextList.append( "\n\n" )
+        print "draw calling woq"
+        return self.writeOrReturn(fh, imp, sitename)
 
 
 
@@ -1104,7 +1123,7 @@ Add a complete on [street] by [player] to [amountTo]
             self.pot.addMoney(player, Decimal(bringin))
 
     
-    def writeHand(self, fh=sys.__stdout__):
+    def writeHand(self, fh=sys.__stdout__, imp=None, sitename=None):
         # PokerStars format.
 
         super(StudHand, self).writeHand(fh)
@@ -1113,81 +1132,81 @@ Add a complete on [street] by [player] to [amountTo]
 
         for player in [x for x in self.players if x[1] in players_who_post_antes]:
             #Only print stacks of players who do something preflop
-            print >>fh, _("Seat %s: %s (%s%s in chips)" %(player[0], player[1], self.sym, player[2]))
+            self.newTextList.append( _("Seat %s: %s (%s%s in chips)" %(player[0], player[1], self.sym, player[2])) )
 
         if 'ANTES' in self.actions:
             for act in self.actions['ANTES']:
-                print >>fh, _("%s: posts the ante %s%s" %(act[0], self.sym, act[3]))
+                self.newTextList.append( _("%s: posts the ante %s%s" %(act[0], self.sym, act[3])) )
 
         if 'THIRD' in self.actions:
             dealt = 0
-            #~ print >>fh, _("*** 3RD STREET ***")
+            #~ self.newTextList.append( _("*** 3RD STREET ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_post_antes]:
                 if self.holecards['THIRD'].has_key(player):
                     (open,  closed) = self.holecards['THIRD'][player]
                     dealt+=1
                     if dealt==1:
-                        print >>fh, _("*** 3RD STREET ***")
-#                    print >>fh, _("Dealt to %s:%s%s") % (player, " [" + " ".join(closed) + "] " if closed else " ", "[" + " ".join(open) + "]" if open else "")
-                    print >>fh, self.writeHoleCards('THIRD', player)
+                        self.newTextList.append( _("*** 3RD STREET ***") )
+#                    self.newTextList.append( _("Dealt to %s:%s%s") % (player, " [" + " ".join(closed) + "] " if closed else " ", "[" + " ".join(open) + "]" if open else "") )
+                    self.newTextList.append( self.writeHoleCards('THIRD', player) )
             for act in self.actions['THIRD']:
                 #FIXME: Need some logic here for bringin vs completes
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if 'FOURTH' in self.actions:
             dealt = 0
-            #~ print >>fh, _("*** 4TH STREET ***")
+            #~ self.newTextList.append( _("*** 4TH STREET ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_post_antes]:
                 if player in self.holecards['FOURTH']:
                     dealt+=1
                     if dealt==1:
-                        print >>fh, _("*** 4TH STREET ***")
-                    print >>fh, self.writeHoleCards('FOURTH', player)
+                        self.newTextList.append( _("*** 4TH STREET ***") )
+                    self.newTextList.append( self.writeHoleCards('FOURTH', player) )
             for act in self.actions['FOURTH']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if 'FIFTH' in self.actions:
             dealt = 0
-            #~ print >>fh, _("*** 5TH STREET ***")
+            #~ self.newTextList.append( _("*** 5TH STREET ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_post_antes]:
                 if self.holecards['FIFTH'].has_key(player):
                     dealt+=1
                     if dealt==1:
-                        print >>fh, _("*** 5TH STREET ***")
-                    print >>fh, self.writeHoleCards('FIFTH', player)
+                        self.newTextList.append( _("*** 5TH STREET ***") )
+                    self.newTextList.append( self.writeHoleCards('FIFTH', player) )
             for act in self.actions['FIFTH']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if 'SIXTH' in self.actions:
             dealt = 0
-            #~ print >>fh, _("*** 6TH STREET ***")
+            #~ self.newTextList.append( _("*** 6TH STREET ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_post_antes]:
                 if self.holecards['SIXTH'].has_key(player):
                     dealt += 1
                     if dealt == 1:
-                        print >>fh, _("*** 6TH STREET ***")
-                    print >>fh, self.writeHoleCards('SIXTH', player)
+                        self.newTextList.append( _("*** 6TH STREET ***") )
+                    self.newTextList.append( self.writeHoleCards('SIXTH', player) )
             for act in self.actions['SIXTH']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         if 'SEVENTH' in self.actions:
             # OK. It's possible that they're all in at an earlier street, but only closed cards are dealt.
             # Then we have no 'dealt to' lines, no action lines, but still 7th street should appear.
             # The only way I can see to know whether to print this line is by knowing the state of the hand
             # i.e. are all but one players folded; is there an allin showdown; and all that.
-            print >>fh, _("*** RIVER ***")
+            self.newTextList.append( _("*** RIVER ***") )
             for player in [x[1] for x in self.players if x[1] in players_who_post_antes]:
                 if self.holecards['SEVENTH'].has_key(player):
                     if self.writeHoleCards('SEVENTH', player):
-                        print >>fh, self.writeHoleCards('SEVENTH', player)
+                        self.newTextList.append( self.writeHoleCards('SEVENTH', player) )
             for act in self.actions['SEVENTH']:
-                print >>fh, self.actionString(act)
+                self.newTextList.append( self.actionString(act) )
 
         #Some sites don't have a showdown section so we have to figure out if there should be one
         # The logic for a showdown is: at the end of river action there are at least two players in the hand
         # we probably don't need a showdown section in pseudo stars format for our filtering purposes
         if 'SHOWDOWN' in self.actions:
-            print >>fh, _("*** SHOW DOWN ***")
+            self.newTextList.append( _("*** SHOW DOWN ***") )
             # TODO: print showdown lines.
 
         # Current PS format has the lines:
@@ -1198,37 +1217,39 @@ Add a complete on [street] by [player] to [amountTo]
         # Immediately before the summary.
         # The current importer uses those lines for importing winning rather than the summary
         for name in self.pot.returned:
-            print >>fh, _("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name))
+            self.newTextList.append( _("Uncalled bet (%s%s) returned to %s" %(self.sym, self.pot.returned[name],name)) )
         for entry in self.collected:
-            print >>fh, _("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1]))
+            self.newTextList.append( _("%s collected %s%s from x pot" %(entry[0], self.sym, entry[1])) )
 
-        print >>fh, _("*** SUMMARY ***")
-        print >>fh, "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake)
+        self.newTextList.append( _("*** SUMMARY ***") )
+        self.newTextList.append( "%s | Rake %s%.2f" % (self.pot, self.sym, self.rake) )
 # TODO: side pots
 
         board = []
         for s in self.board.values():
             board += s
         if board:   # sometimes hand ends preflop without a board
-            print >>fh, _("Board [%s]" % (" ".join(board)))
+            self.newTextList.append( _("Board [%s]" % (" ".join(board))) )
 
         for player in [x for x in self.players if x[1] in players_who_post_antes]:
             seatnum = player[0]
             name = player[1]
             if name in self.collectees and name in self.shown:
-                print >>fh, _("Seat %d: %s showed [%s] and won (%s%s)" % (seatnum, name, self.join_holecards(name), self.sym, self.collectees[name]))
+                self.newTextList.append( _("Seat %d: %s showed [%s] and won (%s%s)" % (seatnum, name, self.join_holecards(name), self.sym, self.collectees[name])) )
             elif name in self.collectees:
-                print >>fh, _("Seat %d: %s collected (%s%s)" % (seatnum, name, self.sym, self.collectees[name]))
+                self.newTextList.append( _("Seat %d: %s collected (%s%s)" % (seatnum, name, self.sym, self.collectees[name])) )
             elif name in self.shown:
-                print >>fh, _("Seat %d: %s showed [%s]" % (seatnum, name, self.join_holecards(name)))
+                self.newTextList.append( _("Seat %d: %s showed [%s]" % (seatnum, name, self.join_holecards(name))) )
             elif name in self.mucked:
-                print >>fh, _("Seat %d: %s mucked [%s]" % (seatnum, name, self.join_holecards(name)))
+                self.newTextList.append( _("Seat %d: %s mucked [%s]" % (seatnum, name, self.join_holecards(name))) )
             elif name in self.folded:
-                print >>fh, _("Seat %d: %s folded" % (seatnum, name))
+                self.newTextList.append( _("Seat %d: %s folded" % (seatnum, name)) )
             else:
-                print >>fh, _("Seat %d: %s mucked" % (seatnum, name))
+                self.newTextList.append( _("Seat %d: %s mucked" % (seatnum, name)) )
 
-        print >>fh, "\n\n"
+        self.newTextList.append( "\n\n" )
+        print "stud calling woq"
+        return self.writeOrReturn(fh, imp, sitename)
 
 
     def writeHoleCards(self, street, player):

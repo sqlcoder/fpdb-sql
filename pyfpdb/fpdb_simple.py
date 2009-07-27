@@ -573,7 +573,11 @@ def parseActionType(line):
 #parses the ante out of the given line and checks which player paid it, updates antes accordingly.
 def parseAnteLine(line, isTourney, names, antes):
     for i, name in enumerate(names):
-        if line.startswith(name.encode("latin-1")):
+        if type(line).__name__ == 'str':
+            nm = name.encode("latin-1")
+        else:
+            nm = name
+        if line.startswith(nm):
             pos = line.rfind("$") + 1
             if not isTourney:
                 antes[i] += float2int(line[pos:])
@@ -735,7 +739,10 @@ def parseHandStartTime(topline):
 def findName(line):
     pos1 = line.find(":") + 2
     pos2 = line.rfind("(") - 1
-    return unicode(line[pos1:pos2], "latin-1")
+    if type(line).__name__ == 'unicode':
+        return line[pos1:pos2]
+    else:
+        return unicode(line[pos1:pos2], "latin-1")
 
 def parseNames(lines):
     return [findName(line) for line in lines]
@@ -852,7 +859,8 @@ def parseTourneyNo(topline):
 def parseWinLine(line, names, winnings, isTourney):
     #print "parseWinLine: line:",line
     for i,n in enumerate(names):
-        n = n.encode("latin-1")
+        if type(line).__name__ == 'str':
+            n = n.encode("latin-1")
         if line.startswith(n):
             if isTourney:
                 pos1 = line.rfind("collected ") + 10
@@ -1065,14 +1073,19 @@ def recognisePlayerIDs(cursor, names, site_id):
 def recognisePlayerNo(line, names, atype):
     #print "recogniseplayerno, names:",names
     for i in xrange(len(names)):
+        if type(line).__name__ == 'unicode':
+            name = names[i]
+        else:
+            name = names[i].encode("latin-1")
+
         if (atype=="unbet"):
-            if (line.endswith(names[i].encode("latin-1"))):
+            if (line.endswith(name)):
                 return (i)
         elif (line.startswith("Dealt to ")):
             #print "recognisePlayerNo, card precut, line:",line
             tmp=line[9:]
             #print "recognisePlayerNo, card postcut, tmp:",tmp
-            if (tmp.startswith(names[i].encode("latin-1"))):
+            if (tmp.startswith(name)):
                 return (i)
         elif (line.startswith("Seat ")):
             if (line.startswith("Seat 10")):
@@ -1080,10 +1093,10 @@ def recognisePlayerNo(line, names, atype):
             else:
                 tmp=line[8:]
             
-            if (tmp.startswith(names[i].encode("latin-1"))):
+            if (tmp.startswith(name)):
                 return (i)
         else:
-            if (line.startswith(names[i].encode("latin-1"))):
+            if (line.startswith(name)):
                 return (i)
     #if we're here we mustve failed
     raise FpdbError ("failed to recognise player in: "+line+" atype:"+atype)

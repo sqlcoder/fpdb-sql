@@ -17,12 +17,14 @@
 
 #methods that are specific to holdem but not trivial
 
+import sys
+
 import fpdb_simple
 import Database
 from time import time, strftime
 
 #parses a holdem hand
-def mainParser(settings, fdb, siteID, category, hand, config, db = None):
+def mainParser(settings, fdb, siteID, category, hand, config, db = None, q = None):
     t0 = time()
     backend = settings['db-backend']
     if db == None:
@@ -146,12 +148,12 @@ def mainParser(settings, fdb, siteID, category, hand, config, db = None):
                                      , actionTypes, actionAmounts, antes)
 
 
-    #print "parse: hand data prepared"    # only reads up to here apart from inserting new players
+    #print "parse: hand data prepared, q =", q    # only reads up to here apart from inserting new players
     try:
         fdb.db.commit()  # need to commit new players as different db connection used 
                          # for other writes. maybe this will change maybe not ...
     except:
-        print "parse: error during rollback: " + str(sys.exc_value)
+        print "mainParser: error during commit: " + str(sys.exc_value)
 
 
     # Following code writes hands to database and commits (or rolls back if there is an error)
@@ -182,13 +184,30 @@ def mainParser(settings, fdb, siteID, category, hand, config, db = None):
                 raise fpdb_simple.FpdbError("unrecognised category")
         else:
             if base == "hold":
-                result = db.ring_holdem_omaha(
-                                           config, settings, base, category, siteHandNo
-                                         , gametypeID, handStartTime, names, playerIDs
-                                         , startCashes, positions, cardValues, cardSuits
-                                         , boardValues, boardSuits, winnings, rakes
-                                         , actionTypes, allIns, actionAmounts, actionNos
-                                         , hudImportData, maxSeats, tableName, seatNos)
+                if q == None:
+                    result = db.ring_holdem_omaha(
+                                               config, settings, base, category, siteHandNo
+                                             , gametypeID, handStartTime, names, playerIDs
+                                             , startCashes, positions, cardValues, cardSuits
+                                             , boardValues, boardSuits, winnings, rakes
+                                             , actionTypes, allIns, actionAmounts, actionNos
+                                             , hudImportData, maxSeats, tableName, seatNos)
+                else:
+                    try:
+                        hand = Database.HandToWrite()
+                        hand.set_ring_holdem_omaha(     
+                                                   config, settings, base, category, siteHandNo
+                                                 , gametypeID, handStartTime, names, playerIDs
+                                                 , startCashes, positions, cardValues, cardSuits
+                                                 , boardValues, boardSuits, winnings, rakes
+                                                 , actionTypes, allIns, actionAmounts, actionNos
+                                                 , hudImportData, maxSeats, tableName, seatNos)
+                        q.put(hand)
+                        #print "sent hand", siteHandNo, "to q"
+                    except:
+                        print "error using handtowrite: " + str(sys.exc_value)
+                        raise fpdb_simple.FpdbError( "error using handtowrite: " + str(sys.exc_value) )
+                    result = -1
             elif base == "stud":
                 result = db.ring_stud(
                                            config, settings, base, category, siteHandNo, gametypeID
